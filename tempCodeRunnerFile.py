@@ -1,16 +1,16 @@
 #Importing Required Libraries
 import numpy as np
 import pandas as pd
-import matplotlib . pyplot as plt
+import matplotlib.pyplot as plt
 from scipy import stats
 import seaborn as sns
 import statsmodels.api as sm
+from sklearn.model_selection import RandomizedSearchCV
+from scipy.stats import randint
+from sklearn.model_selection import KFold, cross_val_score
 from cleandata import preprocess_data, df_cleaned
-from sklearn.svm import SVR 
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
-from sklearn.linear_model import LinearRegression
 from sklearn.metrics import r2_score, mean_squared_error , mean_absolute_error, accuracy_score, classification_report, confusion_matrix
-from sklearn.model_selection import train_test_split
 
 
 #-----Regression Model-----
@@ -19,13 +19,47 @@ def load_and_preprocess():
 
 def regression_analysis(X_train, X_test, y_train_reg, y_test_reg):
     print("\n" + '='*40)
-    print("Regression Analysis (SVR)")
+    print("Regression Analysis (RFG)")
     print("="*40)
 
+     # Parameter distributions for RandomizedSearchCV
+    param_dist = {
+        'n_estimators': randint(10, 100),       # Number of trees
+        'max_depth': [None, 5, 10],        # Tree depth
+        'min_samples_split': randint(2, 10),     # Minimum samples to split
+        'min_samples_leaf': randint(1, 10),      # Minimum samples at leaf
+        'max_features': ['sqrt']   # Feature selection
+    }
+
+    #Initializing K-fold
+    kfold = KFold(n_splits=5, shuffle=True, random_state=42)
+
     #Training SVR
-    svr = SVR(kernel='rbf', C=100, gamma=0.1, epsilon=0.1)
-    svr.fit(X_train, y_train_reg)
-    y_pred = svr.predict(X_test)
+    rfg = RandomizedSearchCV(
+        RandomForestRegressor(random_state=42),
+        param_distributions=param_dist,
+        n_iter=20,           # Number of parameter settings sampled
+        cv=kfold,             
+        scoring='neg_mean_squared_error',
+        n_jobs=-1,
+        random_state=42,
+        verbose=1
+    )
+    
+    rfg.fit(X_train, y_train_reg)
+    best_rfg = rfg.best_estimator_
+
+    #Cross-validated scores (for training data)
+    cv_scores = cross_val_score(
+        best_rfg,
+        X_train,
+        y_train_reg,
+        cv=kfold,
+        scoring='neg_mean_squared_error'
+    )
+    print(f"\nCross-validated RMSE: {-cv_scores.mean():.3f} (±{cv_scores.std():.3f})")
+
+    y_pred = best_rfg.predict(X_test)
 
     #Calculating Metrics
     mae = mean_absolute_error ( y_test_reg , y_pred)
@@ -53,10 +87,10 @@ def regression_analysis(X_train, X_test, y_train_reg, y_test_reg):
              [y_test_reg.min(), y_test_reg.max()], 'r--')
     plt.xlabel("Actual Prices")
     plt.ylabel("Predicted Prices")
-    plt.title("SVR: Actual VS Predicted")
+    plt.title("RandomForestRegressor: Actual VS Predicted")
     plt.show()
 
-    return svr
+    return best_rfg
 
 #------Classification------
 def classification_analysis(X_train, X_test, y_train_clf, y_test_clf):
@@ -64,10 +98,42 @@ def classification_analysis(X_train, X_test, y_train_clf, y_test_clf):
     print("CLASSIFICATION ANALYSIS (RANDOM FOREST)")
     print("="*40)
 
+    param_dist = {
+        'n_estimators': randint(50, 300),        # Wider range but random sampling
+        'max_depth': [None] + list(range(5, 50, 5)),
+        'min_samples_split': randint(2, 20),
+        'min_samples_leaf': randint(1, 10),
+        'max_features': ['sqrt'],  # Feature subsampling
+        'bootstrap': [True, False],
+        'class_weight': [None, 'balanced']       # Handle class imbalance
+    }
+    # Initialize K-fold
+    kfold = KFold(n_splits=5, shuffle=True, random_state=42)
     # Train Random Forest
-    rf = RandomForestClassifier(n_estimators=100, random_state= 42)
+    rf = RandomizedSearchCV(
+        RandomForestClassifier(random_state=42),
+        param_distributions=param_dist,
+        n_iter=30,               # More iterations for complex model
+        cv=kfold,
+        scoring='accuracy',
+        n_jobs=-1,
+        random_state=42,
+        verbose=1
+    )
+
     rf.fit(X_train, y_train_clf)
-    y_pred = rf.predict(X_test)
+    best_rf = rf.best_estimator_
+    #Cross-validated scores (for training data)
+    cv_scores = cross_val_score(
+        best_rf,
+        X_train,
+        y_train_clf,
+        cv=kfold,
+        scoring='accuracy'
+    )
+    print(f"\nCross-validated Accuracy: {cv_scores.mean():.3f} (±{cv_scores.std():.3f})")
+
+    y_pred = best_rf.predict(X_test)
     
     # Calculate metrics
     accuracy = accuracy_score(y_test_clf, y_pred)
@@ -89,7 +155,7 @@ def classification_analysis(X_train, X_test, y_train_clf, y_test_clf):
     plt.show()
     
     # Feature Importance
-    importances = rf.feature_importances_
+    importances = best_rf.feature_importances_
     plt.figure(figsize=(10,5))
     plt.barh(range(X_train.shape[1]), importances, align='center')
     plt.yticks(range(X_train.shape[1]), [f'Feature {i}' for i in range(X_train.shape[1])])
@@ -97,19 +163,19 @@ def classification_analysis(X_train, X_test, y_train_clf, y_test_clf):
     plt.title("Feature Importance")
     plt.show()
     
-    return rf
+    return best_rf
 
 #----Main Execution-----
 if __name__ == "__main__":
     # Load and pre-process
-    X_train, X_test, y_train_reg, y_test_reg, y_train_clf, y_test_clf = load_and_preprocess()
-
-    # Verify data shapes
-    print("=== DATA SHAPES ===")
-    print(f"X_train: {X_train.shape}, X_test: {X_test.shape}")
-    print(f"Regression targets - y_train: {y_train_reg.shape}, y_test: {y_test_reg.shape}")
-    print(f"Classification targets - y_train: {y_train_clf.shape}, y_test: {y_test_clf.shape}")
+    (X_train_scaled,
+        X_val_reg_scaled, X_test_reg_scaled,
+        X_val_clf_scaled, X_test_clf_scaled,
+        y_train_reg, y_val_reg, y_test_reg,
+        y_train_clf, y_val_clf, y_test_clf,
+        scaler,
+        features) = load_and_preprocess()
     
     # Run analyses
-    svr_model = regression_analysis(X_train, X_test, y_train_reg, y_test_reg)
-    rf_model = classification_analysis(X_train, X_test, y_train_clf, y_test_clf)
+    rfg_model = regression_analysis(X_train_scaled, X_test_reg_scaled, y_train_reg, y_test_reg)
+    rf_model = classification_analysis(X_train_scaled, X_test_clf_scaled, y_train_clf, y_test_clf)
